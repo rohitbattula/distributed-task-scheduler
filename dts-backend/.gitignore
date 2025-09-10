@@ -1,0 +1,18 @@
+# Node
+node_modules/
+npm-debug.log*
+pnpm-lock.yaml
+yarn.lock
+
+# Env
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+
+# Misc
+.DS_Store
+dist/
+coverage/
