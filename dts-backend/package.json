@@ -5,20 +5,30 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js"
+    "dev": "nodemon src/index.js",
+    "worker": "nodemon src/worker/index.js",
+    "start": "node src/index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "agenda": "^5.0.0",
+    "axios": "^1.11.0",
+    "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
+    "cron-parser": "^4.9.0",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "luxon": "^3.7.2",
+    "moment-timezone": "^0.6.0",
     "mongoose": "^8.18.1",
-    "morgan": "^1.10.1"
+    "morgan": "^1.10.1",
+    "nodemailer": "^7.0.6",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
