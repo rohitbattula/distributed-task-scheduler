@@ -1,13 +1,14 @@
+// dts-backend/src/worker/sync.js
 import mongoose from "mongoose";
 import Job from "../models/Job.js";
 import { scheduleOne, unscheduleOne } from "./scheduler.js";
 
 /**
  * Start watching Job collection for inserts/updates/deletes.
- * Requires Mongo replica set. Falls back to throwing if not supported.
+ * Requires Mongo replica set (Atlas: yes).
  */
 export async function startLiveSync(agenda) {
-  const coll = mongoose.connection.collection("jobs"); // Mongoose pluralizes: Job -> jobs
+  const coll = mongoose.connection.collection("jobs"); // Job -> jobs
   const pipeline = [
     {
       $match: {
@@ -16,36 +17,25 @@ export async function startLiveSync(agenda) {
     },
   ];
 
-  let stream;
-  try {
-    stream = coll.watch(pipeline, { fullDocument: "updateLookup" });
-  } catch (err) {
-    // Usually "The $changeStream stage is only supported on replica sets"
-    throw Object.assign(
-      new Error(
-        "Change streams not available on this MongoDB (need replica set)."
-      ),
-      { cause: err }
-    );
-  }
-
-  console.log("👂 Live sync (change streams) started");
+  const stream = coll.watch(pipeline, { fullDocument: "updateLookup" });
 
   stream.on("change", async (change) => {
     try {
       if (change.operationType === "delete") {
-        const jobId = change.documentKey?._id;
+        const jobId = String(change.documentKey._id);
         await unscheduleOne(agenda, jobId);
+        console.log("[SYNC] job deleted → unscheduled", jobId);
         return;
       }
 
-      // insert / update / replace
-      const doc = change.fullDocument; // Job doc after change
+      const doc =
+        change.fullDocument || (await Job.findById(change.documentKey._id));
       if (!doc) return;
 
       await scheduleOne(agenda, doc);
+      console.log("[SYNC] job upserted → (re)scheduled", String(doc._id));
     } catch (e) {
-      console.error("live sync error:", e.message);
+      console.error("live sync error:", e?.message || e);
     }
   });
 

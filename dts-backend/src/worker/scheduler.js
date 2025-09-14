@@ -1,5 +1,4 @@
-import Agenda from "agenda";
-
+// dts-backend/src/worker/scheduler.js
 /** normalize repeat registration for a single job */
 export async function scheduleOne(agenda, j) {
   const data = { jobId: String(j._id), attempt: 0 };
@@ -13,7 +12,6 @@ export async function scheduleOne(agenda, j) {
     return;
   }
 
-  // recreate with timezone-aware cron
   const aj = agenda
     .create("execute-job", data)
     .unique(unique)
@@ -21,6 +19,7 @@ export async function scheduleOne(agenda, j) {
       timezone: j.timezone || "UTC",
       skipImmediate: true,
     });
+
   await aj.save();
 
   console.log(

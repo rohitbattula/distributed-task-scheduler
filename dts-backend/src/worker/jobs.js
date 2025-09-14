@@ -1,13 +1,13 @@
+// dts-backend/src/worker/jobs.js
+import mongoose from "mongoose";
 import Job from "../models/Job.js";
 import Run from "../models/Run.js";
 import { runHttp, runScript } from "./exec.js";
-import mongoose from "mongoose";
 
 /**
- * Register job definitions with Agenda.
- * We define two:
- *  - "execute-job": used for cron/repeat schedules
- *  - "execute-job-once": used for retries (one-off)
+ * Register job definitions with Agenda:
+ *  - "execute-job"        (repeaters / cron)
+ *  - "execute-job-once"   (retries / manual run)
  */
 export function defineAgendaJobs(agenda) {
   agenda.define("execute-job", async (job) => {
@@ -19,25 +19,44 @@ export function defineAgendaJobs(agenda) {
 
     const dbJob = await Job.findById(jobId);
     if (!dbJob) {
-      console.warn("[execute-job] job not found:", jobId);
+      console.warn("[execute-job] job not found, unscheduling:", jobId);
+      try {
+        await job.agenda.cancel({
+          name: "execute-job",
+          "data.jobId": String(jobId),
+        });
+      } catch (e) {
+        console.warn("unschedule failed:", e.message);
+      }
       return;
     }
+
     if (dbJob.paused) {
       console.log(`[execute-job] paused: ${dbJob.name}`);
       return;
     }
 
     const startedAt = new Date();
-    let execResult;
-    if (dbJob.type === "http") {
-      const httpCfg = dbJob.http || { url: dbJob.target }; // fallback legacy
-      execResult = await runHttp(httpCfg);
-    } else {
-      const scriptCfg = dbJob.script || { command: dbJob.target }; // fallback legacy
-      execResult = await runScript(scriptCfg);
-    }
+
+    // Execute job
+    const execResult =
+      dbJob.type === "http"
+        ? await runHttp(dbJob.http || { url: dbJob.target }) // legacy fallback
+        : await runScript(dbJob.script || { command: dbJob.target });
+
     const finishedAt = new Date();
 
+    // Log the reason to console if it failed (helps you debug quickly)
+    if (!execResult.ok) {
+      console.error(
+        `[execute-job] ${dbJob.name} failed:\n${(execResult.logs || "").slice(
+          0,
+          800
+        )}`
+      );
+    }
+
+    // Persist run (ownerId required by schema)
     await Run.create({
       ownerId: dbJob.ownerId,
       job: dbJob._id,
@@ -45,14 +64,14 @@ export function defineAgendaJobs(agenda) {
       startedAt,
       finishedAt,
       logs: execResult.logs,
-      result: execResult.result,
+      result: execResult.result ?? null,
     });
 
-    // Visible logs per fire
     console.log(
       `[execute-job] ${dbJob.name} → ${execResult.ok ? "success" : "error"}`
     );
 
+    // Retry with backoff if configured
     if (!execResult.ok && attempt < (dbJob.retries || 0)) {
       const retryDelayMs = Math.max((dbJob.backoffSec || 60) * 1000, 1000);
       await agenda.schedule(
@@ -71,7 +90,7 @@ export function defineAgendaJobs(agenda) {
     }
   });
 
-  // Keep this simple: delegate to the same logic immediately
+  // One-off runner (delegate to same logic)
   agenda.define("execute-job-once", async (job) => {
     const data = job.attrs.data || {};
     await agenda.now("execute-job", data);
@@ -79,22 +98,22 @@ export function defineAgendaJobs(agenda) {
 }
 
 /**
- * Register repeating schedules for all non-paused jobs.
- * Uses unique({ 'data.jobId': jobId }) to avoid duplicates across restarts.
+ * Register repeating schedules for all jobs (skips paused).
  */
 export async function registerAllSchedules(agenda) {
-  const jobs = await Job.find({ paused: false }).lean();
-
+  const jobs = await Job.find({}).lean();
   for (const j of jobs) {
     const data = { jobId: String(j._id), attempt: 0 };
-
-    // Ensure uniqueness per job
     const unique = { name: "execute-job", "data.jobId": data.jobId };
 
-    // Remove any broken/old repeaters for this job (safe in dev)
+    // Clear any old/broken repeaters for this job
     await agenda.cancel(unique);
 
-    // Create and persist a proper repeat job with timezone
+    if (j.paused) {
+      console.log(`⏸️  unscheduled (paused): ${j.name}`);
+      continue;
+    }
+
     const aj = agenda
       .create("execute-job", data)
       .unique(unique)
